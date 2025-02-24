@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"mime"
@@ -12,13 +13,30 @@ import (
 	"github.com/google/uuid"
 )
 
+type readAtFile struct {
+	io.Reader
+	io.Seeker
+	io.Closer
+}
+
+func (r *readAtFile) ReadAt(p []byte, off int64) (n int, err error) {
+	_, err = r.Seek(off, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+	return r.Read(p)
+}
+
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
+	// Get the videID from HTTP Path, the check if the video exists
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
 		return
 	}
+
+	// Check if user is authenticated
 
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -31,6 +49,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
 		return
 	}
+
+	// Gather file from request
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
@@ -45,15 +65,52 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	mediaType := header.Header.Get("Content-Type")
-	if mediaType == "" {
-		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
+	// Check if it is a PNG or JPEG
+
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
 		return
+	}
+
+	if mediaType != "image/png" && mediaType != "image/jpeg" {
+		respondWithError(w, http.StatusBadRequest, "Invalid filetype", nil)
+		return
+	}
+
+	// Check if the file is the same format as Content-Type
+
+	const mimeDetectionBufferSize = 512
+	buffer := make([]byte, mimeDetectionBufferSize)
+
+	// Read the first 512 bytes of the file into the buffer
+	_, err = io.ReadFull(file, buffer)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Could not read file for MIME detection", err)
+		return
+	}
+
+	// Detect the MIME type from the content
+	detectedMediaType := http.DetectContentType(buffer)
+
+	// Validate that the detected MIME type matches the Content-Type
+	if detectedMediaType != mediaType {
+		respondWithError(w, http.StatusBadRequest, "MIME type is different from Content-Type", nil)
+		return
+	}
+
+	// Rebuild the file stream by combining the buffer and the remaining unread file data
+	combinedReader := io.MultiReader(bytes.NewReader(buffer), file)
+
+	file = &readAtFile{
+		Reader: combinedReader,
+		Seeker: file.(io.Seeker), // Ensures the original file implements io.Seeker
+		Closer: file.(io.Closer), // Ensures the original file implements io.Closer
 	}
 
 	videoThumbnailExtension, err := mime.ExtensionsByType(mediaType)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Content-Type not recognized", nil)
+		respondWithError(w, http.StatusBadRequest, "Content-Type not recognized", err)
 		return
 	}
 
@@ -75,6 +132,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "Error creating new file", err)
 		return
 	}
+
+	defer videoThumbnailFile.Close()
 
 	_, err = io.Copy(videoThumbnailFile, file)
 	if err != nil {
