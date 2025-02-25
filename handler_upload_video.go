@@ -129,6 +129,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var folderName string
+	aspectRatio, err := getVideoAspectRatio(videoLocalFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error checking the aspect ratio of videofile", err)
+		return
+	}
+
+	switch aspectRatio {
+	case "1.78":
+		folderName = "landscape"
+	case "0.56":
+		folderName = "portrait"
+	default:
+		folderName = "other"
+	}
+
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
 
@@ -137,7 +153,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	videoFilename := base64.RawURLEncoding.EncodeToString(randomBytes)
-	s3Key := fmt.Sprintf("%s%s", videoFilename, videoExtension[0])
+	s3Key := fmt.Sprintf("%s/%s%s", folderName, videoFilename, videoExtension[0])
 
 	videoLocalFile.Seek(0, io.SeekStart)
 
