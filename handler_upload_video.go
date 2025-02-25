@@ -145,6 +145,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		folderName = "other"
 	}
 
+	videoLocalOutputFileName, err := processVideoForFastStart(videoLocalFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error processing file", err)
+		return
+	}
+
+	videoLocalOutputFile, err := os.OpenFile(videoLocalOutputFileName, os.O_RDONLY, 0644)
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error reading processed file", err)
+		return
+	}
+
+	defer os.Remove(videoLocalOutputFile.Name())
+	defer videoLocalOutputFile.Close()
+
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
 
@@ -155,12 +171,10 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	videoFilename := base64.RawURLEncoding.EncodeToString(randomBytes)
 	s3Key := fmt.Sprintf("%s/%s%s", folderName, videoFilename, videoExtension[0])
 
-	videoLocalFile.Seek(0, io.SeekStart)
-
 	s3PutObjectInput := s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(s3Key),
-		Body:        videoLocalFile,
+		Body:        videoLocalOutputFile,
 		ContentType: &mediaType,
 	}
 
