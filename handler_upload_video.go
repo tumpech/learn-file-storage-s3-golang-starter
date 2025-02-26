@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -184,14 +185,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	videoURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, s3Key)
+	videoURL := fmt.Sprintf("%s,%s", cfg.s3Bucket, s3Key)
 	video.VideoURL = &videoURL
+
+	log.Printf("videoURL = %v, video = %v", videoURL, video.VideoURL)
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
+
+	log.Printf("video = %v", video)
+
+	video, err = cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't generate video URL.", err)
+		return
+	}
+	log.Printf("video = %v", video)
 
 	respondWithJSON(w, http.StatusOK, video)
 }
